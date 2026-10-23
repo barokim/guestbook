@@ -20,7 +20,7 @@ PAGE_SIZE = 10
 MAX_ENTRIES = 1000
 MAX_BODY_BYTES = 16384
 KST = timezone(timedelta(hours=9))
-PAGE = Template((BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8"))
+PAGE = Template((BASE_DIR /"index.html").read_text(encoding="utf-8"))
 
 
 class EntryInput(BaseModel):
