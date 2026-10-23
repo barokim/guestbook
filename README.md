@@ -245,6 +245,8 @@ https://실제-서비스-주소.onrender.com/health
 
 ### 자주 막히는 부분
 
+`templates/index.html` 누락 오류가 반복되고 폴더 업로드가 어렵다면 [단일 파일 배포본](render-upload/README.md)을 사용할 수 있습니다. HTML·CSS가 포함된 `render-upload/main.py`로 **GitHub의 기존 실행 파일**을 교체합니다. 학습용 소스와 화면 파일을 변경한 뒤에는 `python prepare_render.py`로 배포본을 다시 생성하세요.
+
 | 증상 | 먼저 확인할 항목 |
 | --- | --- |
 | 저장소 목록에 앱이 없음 | Render의 GitHub 연결, Render 앱의 저장소 접근 범위 |
