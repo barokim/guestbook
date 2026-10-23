@@ -3,12 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="안녕하세요, 김바로입니다. 잠깐들러 작은 인사를 남기는 방명록입니다.">
-  <title>안녕하세요^^. 김바로입니다.</title>
+  <meta name="description" content="안녕하세요! 방명록입니다.">
+  <title>바다사랑바로_방명록</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="topbar"><a class="brand" href="/"><span aria-hidden="true">✳</span> 방명록</a><span class="top-note"> 안녕하세요^^~ 만나서 반가워요</span></header>
+  <!-- [변경] 첫 방문 대화명 팝업. 입력 전에는 뒤의 화면을 inert로 조작할 수 없게 합니다. -->
+  $nickname_dialog
+  <div class="site-content" $background_inert>
+  <header class="topbar"><a class="brand" href="/"><span aria-hidden="true">✳</span> 바다사랑바로_방명록</a><span class="top-note">$greeting</span></header>
   <main>
     <section class="intro" aria-labelledby="title">
       <p class="eyebrow">A LITTLE HELLO</p>
@@ -21,8 +24,10 @@
         <div class="section-heading"><h2 id="write-title">인사 남기기</h2><span aria-hidden="true">↗</span></div>
         <p class="hint">다정한 한마디를 기다리고 있어요.</p>
         <form method="post" action="/entries" accept-charset="UTF-8">
-          <label for="name">이름 <span>최대 20자</span></label>
-          <input id="name" name="name" maxlength="20" required autocomplete="nickname" placeholder="어떤 이름으로 남길까요?" value="$name">
+          <!-- [변경] 선택한 대화명은 읽기 전용으로 표시하고, 글 본문만 서버로 보냅니다. -->
+          <label for="name">대화명 <a class="name-change" href="/nickname">변경</a></label>
+          <input id="name" maxlength="20" readonly value="$name" aria-describedby="name-help">
+          <p id="name-help" class="name-help">처음 선택한 대화명으로 글이 등록됩니다.</p>
           <label for="message">남기고 싶은 말 <span>최대 1,000자</span></label>
           <textarea id="message" name="message" maxlength="1000" rows="7" required placeholder="편하게 인사를 건네주세요.">$message</textarea>
           <p class="privacy">작성한 이름과 내용은 모두에게 공개됩니다.<br>연락처 등 개인정보는 남기지 말아주세요.</p>
@@ -37,5 +42,6 @@
     </div>
   </main>
   <footer><span aria-hidden="true">✳</span> 작은 인사가 모여, 따뜻한 공간이 됩니다.</footer>
+  </div>
 </body>
 </html>
