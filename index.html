@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="잠깐 들러, 작은 인사를 남기는 방명록입니다.">
+  <title>작은 방명록 — 당신의 한마디</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/"><span aria-hidden="true">✳</span> 작은 방명록</a><span class="top-note">만나서 반가워요</span></header>
+  <main>
+    <section class="intro" aria-labelledby="title">
+      <p class="eyebrow">A LITTLE HELLO</p>
+      <h1 id="title">당신의 한마디가<br>머무는 곳.</h1>
+      <p class="description">오늘의 기분도, 짧은 안부도 좋아요.<br>잠깐 들러 작은 흔적을 남겨주세요.</p>
+    </section>
+    $notice
+    <div class="layout">
+      <section class="compose" aria-labelledby="write-title">
+        <div class="section-heading"><h2 id="write-title">인사 남기기</h2><span aria-hidden="true">↗</span></div>
+        <p class="hint">다정한 한마디를 기다리고 있어요.</p>
+        <form method="post" action="/entries" accept-charset="UTF-8">
+          <label for="name">이름 <span>최대 20자</span></label>
+          <input id="name" name="name" maxlength="20" required autocomplete="nickname" placeholder="어떤 이름으로 남길까요?" value="$name">
+          <label for="message">남기고 싶은 말 <span>최대 1,000자</span></label>
+          <textarea id="message" name="message" maxlength="1000" rows="7" required placeholder="편하게 인사를 건네주세요.">$message</textarea>
+          <p class="privacy">작성한 이름과 내용은 모두에게 공개됩니다.<br>연락처 등 개인정보는 남기지 말아주세요.</p>
+          <button type="submit">방명록 남기기 <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+      <section id="entries" class="entries" aria-labelledby="entries-title">
+        <div class="section-heading"><h2 id="entries-title">남겨진 인사 <span class="count">$total</span></h2><span class="sort">최신순</span></div>
+        $entries
+        <nav class="pagination" aria-label="방명록 페이지">$navigation</nav>
+      </section>
+    </div>
+  </main>
+  <footer><span aria-hidden="true">✳</span> 작은 인사가 모여, 따뜻한 공간이 됩니다.</footer>
+</body>
+</html>
