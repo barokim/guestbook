@@ -175,3 +175,4 @@ def health():
     with closing(connect_db()) as connection:
         connection.execute("SELECT 1 FROM entries LIMIT 1").fetchall()
     return {"status": "ok"}
+
