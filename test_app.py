@@ -13,21 +13,25 @@ import main
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GUESTBOOK_DB", str(tmp_path / "test.sqlite3"))
     with TestClient(main.app) as test_client:
+        test_client.post("/nickname", data={"name": "손님"})
         yield test_client
 
 
 def test_empty_page_and_assets(client):
+    client.cookies.clear()
     response = client.get("/")
     assert response.status_code == 200
     assert "아직은 빈 페이지예요" in response.text
     assert '<html lang="ko">' in response.text
     assert "<script" not in response.text
+    assert 'href="/chat"' not in response.text
     assert client.get("/static/style.css").status_code == 200
     assert client.get("/health").json() == {"status": "ok"}
 
 
 def test_create_redirect_and_persist(client):
-    response = client.post("/entries", data={"name": "  민수  ", "message": " 반가워요!\n좋은 하루! "}, follow_redirects=False)
+    client.post("/nickname", data={"name": "  민수  "})
+    response = client.post("/entries", data={"message": " 반가워요!\n좋은 하루! "}, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/?saved=1#entries"
     with TestClient(main.app) as another_client:
@@ -43,15 +47,15 @@ def test_create_redirect_and_persist(client):
 
 
 @pytest.mark.parametrize("data", [
-    {"name": "", "message": "내용"},
-    {"name": "   ", "message": "내용"},
-    {"name": "민수", "message": "\n\t "},
-    {"name": "가" * 21, "message": "내용"},
-    {"name": "민수", "message": "가" * 1001},
-    {"name": "민수"},
+    {"message": ""},
+    {"message": "   "},
+    {"message": "\n\t "},
+    {"name": "금지", "message": "내용"},
+    {"message": "가" * 1001},
+    {},
 ])
 def test_reject_invalid_fields(client, data):
-    response = client.post("/entries", data=data)
+    response = client.post("/entries", data=data, headers={"content-type":"application/x-www-form-urlencoded"})
     assert response.status_code == 422
     assert "role=\"alert\"" in response.text
     with main.closing(main.connect_db()) as connection:
@@ -59,13 +63,15 @@ def test_reject_invalid_fields(client, data):
 
 
 def test_max_lengths_accepted(client):
-    response = client.post("/entries", data={"name": "가" * 20, "message": "나" * 1000}, follow_redirects=False)
+    client.post("/nickname", data={"name": "가" * 20})
+    response = client.post("/entries", data={"message": "나" * 1000}, follow_redirects=False)
     assert response.status_code == 303
 
 
 def test_escape_html_and_parameterized_sql(client):
     message = "<script>alert('x')</script>\n'); DROP TABLE entries; --"
-    client.post("/entries", data={"name": '<b>이름</b>', "message": message})
+    client.post("/nickname", data={"name": '<b>이름</b>'})
+    client.post("/entries", data={"message": message})
     page = client.get("/").text
     assert "<script>" not in page
     assert "&lt;script&gt;" in page
@@ -75,7 +81,7 @@ def test_escape_html_and_parameterized_sql(client):
 
 
 def test_invalid_form_preserves_escaped_input(client):
-    response = client.post("/entries", data={"name": "", "message": "</textarea><script>x</script>"})
+    response = client.post("/entries", data={"message": "</textarea><script>x</script>" + "x" * 1001})
     assert response.status_code == 422
     assert "&lt;/textarea&gt;" in response.text
     assert "<script>" not in response.text
@@ -83,7 +89,7 @@ def test_invalid_form_preserves_escaped_input(client):
 
 def test_latest_first_and_pagination(client):
     for index in range(11):
-        client.post("/entries", data={"name": "손님", "message": f"게시글-{index:02}"})
+        client.post("/entries", data={"message": f"게시글-{index:02}"})
     first = client.get("/").text
     second = client.get("/?page=2").text
     assert "게시글-10" in first and "게시글-00" not in first
@@ -118,7 +124,7 @@ def test_atomic_storage_limit(client, monkeypatch):
     with ThreadPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(main.save_entry, [entry] * 4))
     assert sum(results) == 2
-    assert client.post("/entries", data={"name": "손님", "message": "추가"}).status_code == 409
+    assert client.post("/entries", data={"message": "추가"}).status_code == 409
 
 
 def test_database_failure_returns_recoverable_page(client, monkeypatch):

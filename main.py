@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 from contextlib import closing
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -15,6 +16,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+DB_PATH_OVERRIDE = ContextVar("guestbook_db_override", default=None)
 
 BASE_DIR = Path(__file__).resolve().parent
 PAGE_SIZE = 10
@@ -61,6 +64,12 @@ class NicknameInput(BaseModel):
 
 def get_nickname(request: Request) -> str:
     """[변경] 한글 쿠키를 복원하고, 없거나 잘못된 쿠키는 첫 방문으로 처리."""
+    # 실습 앱에서만 서명 검증을 통과한 세션을 사용합니다. 기존 쿠키로 폴백하지 않습니다.
+    if "session" in request.scope:
+        try:
+            return NicknameInput(name=request.session.get("name", "")).name
+        except ValidationError:
+            return ""
     raw = request.cookies.get(NICKNAME_COOKIE, "")
     if not raw or len(raw) > 300:
         return ""
@@ -79,7 +88,7 @@ class EntryInput(BaseModel):
 
 def get_database_path() -> Path:
     """[변경] 실행 작업 폴더가 바뀌어도 같은 DB 파일을 사용하도록 경로를 고정."""
-    configured = os.environ.get("GUESTBOOK_DB", "").strip()
+    configured = DB_PATH_OVERRIDE.get() or os.environ.get("GUESTBOOK_DB", "").strip()
     path = Path(configured).expanduser() if configured else BASE_DIR / "data" / "guestbook.sqlite3"
     if not path.is_absolute():
         path = BASE_DIR / path
@@ -161,6 +170,7 @@ def render_page(page=1, error="", name="", message="", status_code=200, saved=Fa
 
     return HTMLResponse(PAGE.substitute(
         total=total, entries="".join(cards), navigation="".join(navigation),
+        lab_navigation='<a href="/chat">공개 채팅 실습</a>' if DB_PATH_OVERRIDE.get() else "",
         notice=notice, name=escape(name, quote=True), message=escape(message),
         nickname_dialog=dialog, background_inert="inert" if show_nickname else "",
         greeting=escape(f"{name}님, 반가워요" if name else "만나서 반가워요"),
@@ -249,6 +259,16 @@ async def set_nickname(request: Request):
             status_code=error.status_code if isinstance(error, HTTPException) else 422,
         )
     response = RedirectResponse("/", status_code=303)
+    if "session" in request.scope:
+        from uuid import uuid4
+        # 서명은 변조 방지이며 본인 인증이 아닙니다. 이름 변경은 새 익명 세션입니다.
+        on_change = getattr(request.app.state, "on_nickname_change", None)
+        if on_change and request.session.get("sid"):
+            await on_change(request.session["sid"])
+        request.session.clear()
+        request.session.update(name=name, sid=uuid4().hex)
+        response.delete_cookie(NICKNAME_COOKIE, path="/")
+        return response
     # [변경] 한글을 URL 인코딩한 쿠키로 30일 기억합니다. JS에서는 읽을 수 없습니다.
     response.set_cookie(NICKNAME_COOKIE, quote(name, safe=""), max_age=30 * 24 * 60 * 60,
                         httponly=True, secure=request.url.scheme == "https", samesite="lax", path="/")

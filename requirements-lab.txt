@@ -1,0 +1,4 @@
+-r requirements-dev.txt
+itsdangerous==2.2.0
+websockets==16.1.1
+starlette==1.10.0
