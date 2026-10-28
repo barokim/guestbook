@@ -1,14 +1,17 @@
 """실행: python -m uvicorn main:app --reload (이 파일이 있는 폴더에서)."""
 
+import json
 import logging
 import os
-import sqlite3
-from contextlib import closing
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from string import Template
 from urllib.parse import parse_qs, quote, unquote
+
+import psycopg
+from psycopg.rows import dict_row
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -77,49 +80,76 @@ class EntryInput(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
 
 
-def get_database_path() -> Path:
-    """[변경] 실행 작업 폴더가 바뀌어도 같은 DB 파일을 사용하도록 경로를 고정."""
-    configured = os.environ.get("GUESTBOOK_DB", "").strip()
-    path = Path(configured).expanduser() if configured else BASE_DIR / "data" / "guestbook.sqlite3"
+class DatabaseConfigError(Exception):
+    """설정 오류에는 접속 정보나 비밀번호를 포함하지 않습니다."""
+
+
+def load_database_config() -> dict:
+    """JSON은 import 대신 json.load로 읽습니다. 기본 위치는 main.py 옆입니다."""
+    configured = os.environ.get("GUESTBOOK_CONFIG", "").strip()
+    path = Path(configured).expanduser() if configured else BASE_DIR / "config.json"
     if not path.is_absolute():
         path = BASE_DIR / path
-    # 경로를 고정해도 Render Free의 임시 디스크가 영구 디스크로 바뀌지는 않습니다.
-    return path.resolve()
+    try:
+        with path.open(encoding="utf-8-sig") as file:
+            config = json.load(file)
+    except (OSError, ValueError) as error:
+        raise DatabaseConfigError("config.json 파일을 읽을 수 없습니다.") from None
+    if not isinstance(config, dict):
+        raise DatabaseConfigError("config.json은 JSON 객체여야 합니다.")
+    for key in ("host", "dbname", "user", "password"):
+        if not isinstance(config.get(key), str) or not config[key].strip():
+            raise DatabaseConfigError("DB 연결 설정의 필수 항목을 확인해주세요.")
+    port = config.get("port", 5432)
+    if isinstance(port, bool) or not isinstance(port, (str, int)):
+        raise DatabaseConfigError("DB 포트 번호를 확인해주세요.")
+    try:
+        port = int(port)
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError:
+        raise DatabaseConfigError("DB 포트 번호를 확인해주세요.") from None
+    # 임의의 JSON 키를 드라이버로 전달하지 않습니다. SSL을 필수로 사용합니다.
+    return {key: config[key] for key in ("host", "dbname", "user", "password")} | {"port": port}
 
 
 def connect_db():
-    """연결을 작업마다 열고 closing으로 닫는다. 테이블은 기존 entries 하나만 사용."""
-    path = get_database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=5)
-    try:
-        connection.row_factory = sqlite3.Row
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 20),
-                message TEXT NOT NULL CHECK(length(trim(message)) BETWEEN 1 AND 1000),
-                created_at TEXT NOT NULL
-            )
-        """)
-        connection.commit()
-    except sqlite3.Error:
-        # [변경] 초기화 실패 시에도 DB 연결을 닫고 오류를 상위 처리기로 전달합니다.
-        connection.close()
-        raise
-    return connection
+    """Supabase PostgreSQL에 연결합니다. with 블록 종료 시 연결도 닫힙니다."""
+    return psycopg.connect(
+        **load_database_config(),
+        sslmode="require",
+        connect_timeout=10,
+        prepare_threshold=None,
+        row_factory=dict_row,
+    )
+
+
+def initialize_database():
+    """앱 시작 시 한 번만 테이블을 준비합니다. 기존 행은 변경하지 않습니다."""
+    with connect_db() as connection:
+        connection.execute((BASE_DIR / "schema.sql").read_text(encoding="utf-8"))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await run_in_threadpool(initialize_database)
+    yield
 
 
 def render_page(page=1, error="", name="", message="", status_code=200, saved=False,
                 show_nickname=False, nickname_error="", nickname_value=None):
-    with closing(connect_db()) as connection:
-        total = connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+    with connect_db() as connection:
+        total = connection.execute("SELECT COUNT(*) AS total FROM public.entries").fetchone()["total"]
         pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(max(1, page), pages)
         records = connection.execute(
-            "SELECT * FROM entries ORDER BY id DESC LIMIT ? OFFSET ?",
+            "SELECT id, name, message, created_at FROM public.entries ORDER BY id DESC LIMIT %s OFFSET %s",
             (PAGE_SIZE, (page - 1) * PAGE_SIZE),
         ).fetchall()
+
+    # PostgreSQL TIMESTAMPTZ는 datetime 객체입니다. 화면은 기존처럼 한국 시각으로 표시합니다.
+    for record in records:
+        record["created_at"] = record["created_at"].astimezone(KST).isoformat(timespec="seconds")
 
     cards = []
     for entry in records:
@@ -172,28 +202,22 @@ def render_page(page=1, error="", name="", message="", status_code=200, saved=Fa
 
 
 def save_entry(entry):
-    """건수 확인과 저장을 같은 트랜잭션으로 묶어 동시 요청의 상한 초과를 막는다."""
-    with closing(connect_db()) as connection:
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            count = connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-            if count >= MAX_ENTRIES:
-                connection.rollback()
-                return False
-            connection.execute(
-                "INSERT INTO entries (name, message, created_at) VALUES (?, ?, ?)",
-                (entry.name, entry.message, datetime.now(KST).isoformat(timespec="seconds")),
-            )
-            # [변경] commit이 성공한 경우에만 저장 완료로 응답합니다.
-            # 기존 with connection도 자동 commit했지만 학습·오류 추적을 위해 명시했습니다.
-            connection.commit()
-        except sqlite3.Error:
-            connection.rollback()
-            raise
+    """잠금·건수 확인·저장을 한 트랜잭션으로 묶어 동시 요청의 상한 초과를 막습니다."""
+    with connect_db() as connection:
+        # 일반 조회는 허용하고, 동시 INSERT 및 다른 저장 요청은 직렬화합니다.
+        connection.execute("LOCK TABLE public.entries IN SHARE ROW EXCLUSIVE MODE")
+        count = connection.execute("SELECT COUNT(*) AS total FROM public.entries").fetchone()["total"]
+        if count >= MAX_ENTRIES:
+            return False
+        connection.execute(
+            "INSERT INTO public.entries (name, message, created_at) VALUES (%s, %s, %s)",
+            (entry.name, entry.message, datetime.now(KST)),
+        )
+        # with 블록을 정상적으로 빠져나올 때 commit, 예외 시 rollback합니다.
     return True
 
 
-app = FastAPI(title="작은 방명록", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(lifespan=lifespan, title="작은 방명록", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
@@ -283,11 +307,12 @@ async def create_entry(request: Request):
     return RedirectResponse("/?saved=1#entries", status_code=303)
 
 
-@app.exception_handler(sqlite3.Error)
+@app.exception_handler(psycopg.Error)
+@app.exception_handler(DatabaseConfigError)
 @app.exception_handler(OSError)
 async def database_error(request: Request, error: Exception):
     # [변경] 저장 실패는 로그와 503으로 알립니다. 사용자에게 저장 성공을 안내하지 않습니다.
-    logger.error("방명록 DB/파일 작업 실패", exc_info=error)
+    logger.error("방명록 DB/파일 작업 실패 (%s)", type(error).__name__)
     # DB가 고장 난 경우 DB를 다시 조회하는 render_page를 호출하지 않는다.
     return HTMLResponse(
         '<!doctype html><html lang="ko"><meta charset="utf-8"><title>잠시 후 다시 시도해주세요</title>'
@@ -298,11 +323,6 @@ async def database_error(request: Request, error: Exception):
 
 @app.get("/health")
 def health():
-    with closing(connect_db()) as connection:
-        connection.execute("SELECT 1 FROM entries LIMIT 1").fetchall()
-    return {"status": "ok"}
-
-def health():
-    with closing(connect_db()) as connection:
-        connection.execute("SELECT 1 FROM entries LIMIT 1").fetchall()
+    with connect_db() as connection:
+        connection.execute("SELECT 1 FROM public.entries LIMIT 1").fetchall()
     return {"status": "ok"}
