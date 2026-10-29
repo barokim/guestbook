@@ -26,6 +26,7 @@ MAX_BODY_BYTES = 16384
 KST = timezone(timedelta(hours=9))
 PAGE = Template((BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8"))
 
+
 # [변경] 대화명만 쿠키에 기억합니다. 회원가입이나 본인 인증 기능은 아닙니다.
 NICKNAME_COOKIE = "guestbook_name"
 logger = logging.getLogger("guestbook")
