@@ -86,7 +86,7 @@ class DatabaseConfigError(Exception):
 
 
 def load_database_config() -> dict:
-    """JSON은 import 대신 json.load로 읽습니다. 기본 위치는 main.py 옆입니다."""
+    """연결 설정은 JSON에서, 비밀번호는 DB_PASSWORD 환경변수에서 읽습니다."""
     configured = os.environ.get("GUESTBOOK_CONFIG", "").strip()
     path = Path(configured).expanduser() if configured else BASE_DIR / "config.json"
     if not path.is_absolute():
@@ -98,6 +98,10 @@ def load_database_config() -> dict:
         raise DatabaseConfigError("config.json 파일을 읽을 수 없습니다.") from None
     if not isinstance(config, dict):
         raise DatabaseConfigError("config.json은 JSON 객체여야 합니다.")
+    password = os.environ.get("DB_PASSWORD", "")
+    if not password.strip():
+        raise DatabaseConfigError("DB_PASSWORD 환경변수를 설정해주세요.")
+    config["password"] = password
     for key in ("host", "dbname", "user", "password"):
         if not isinstance(config.get(key), str) or not config[key].strip():
             raise DatabaseConfigError("DB 연결 설정의 필수 항목을 확인해주세요.")
